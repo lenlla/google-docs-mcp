@@ -1,4 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import realFs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import {
   WORKSPACE_EXPORT_DEFAULTS,
@@ -375,14 +377,174 @@ describe('downloadFile integration', () => {
     it('should accept absolute savePath outside CWD', async () => {
       createMockDrive();
 
+      // Expectations are derived through `path` so they hold on POSIX and
+      // Windows alike -- the implementation returns path.resolve(savePath).
+      const expected = path.resolve('/tmp/test-downloads/report.pdf');
+
       const result = await toolExecute(
         { fileId: 'f1', savePath: '/tmp/test-downloads/report.pdf' },
         { log: mockLog }
       );
 
       const parsed = JSON.parse(result);
-      expect(parsed.savedTo).toBe('/tmp/test-downloads/report.pdf');
-      expect(mockMkdirSync).toHaveBeenCalledWith('/tmp/test-downloads', { recursive: true });
+      expect(parsed.savedTo).toBe(expected);
+      expect(parsed.savedTo.startsWith(process.cwd())).toBe(false); // genuinely outside cwd
+      expect(mockMkdirSync).toHaveBeenCalledWith(path.dirname(expected), { recursive: true });
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Opt-in download-root allowlist (GOOGLE_DOCS_DOWNLOAD_ROOTS)
+  // -------------------------------------------------------------------------
+
+  describe('download root allowlist', () => {
+    // Real, existing directories: getDownloadRoots() validates roots against
+    // disk. Pre-realpathed so expectations are exact on every platform.
+    const ROOT_A = fs.realpathSync(os.tmpdir());
+    const ROOT_B = fs.realpathSync(process.cwd());
+    const ORIGINAL_ROOTS = process.env.GOOGLE_DOCS_DOWNLOAD_ROOTS;
+
+    afterEach(() => {
+      if (ORIGINAL_ROOTS === undefined) delete process.env.GOOGLE_DOCS_DOWNLOAD_ROOTS;
+      else process.env.GOOGLE_DOCS_DOWNLOAD_ROOTS = ORIGINAL_ROOTS;
+    });
+
+    it('should reject a savePath outside every root BEFORE any filesystem mutation', async () => {
+      createMockDrive();
+      process.env.GOOGLE_DOCS_DOWNLOAD_ROOTS = ROOT_A;
+      const outside = path.resolve(path.sep, 'etc', 'evil', 'pwned.txt');
+
+      await expect(
+        toolExecute({ fileId: 'f1', savePath: outside }, { log: mockLog })
+      ).rejects.toThrow(UserError);
+      await expect(
+        toolExecute({ fileId: 'f1', savePath: outside }, { log: mockLog })
+      ).rejects.toThrow(/GOOGLE_DOCS_DOWNLOAD_ROOTS/);
+
+      expect(mockMkdirSync).not.toHaveBeenCalled();
+      expect(mockCreateWriteStream).not.toHaveBeenCalled();
+      expect(mockPipeline).not.toHaveBeenCalled();
+      expect(mockUnlinkSync).not.toHaveBeenCalled();
+    });
+
+    it('should reject a traversal escape out of the configured root', async () => {
+      createMockDrive();
+      process.env.GOOGLE_DOCS_DOWNLOAD_ROOTS = ROOT_A;
+
+      await expect(
+        toolExecute(
+          { fileId: 'f1', savePath: path.join(ROOT_A, '..', '..', 'evil.txt') },
+          { log: mockLog }
+        )
+      ).rejects.toThrow(UserError);
+
+      expect(mockMkdirSync).not.toHaveBeenCalled();
+      expect(mockCreateWriteStream).not.toHaveBeenCalled();
+    });
+
+    it('should accept a savePath inside a configured root', async () => {
+      createMockDrive();
+      process.env.GOOGLE_DOCS_DOWNLOAD_ROOTS = ROOT_A;
+      const target = path.join(ROOT_A, 'nested', 'report.pdf');
+
+      const result = await toolExecute({ fileId: 'f1', savePath: target }, { log: mockLog });
+
+      expect(JSON.parse(result).savedTo).toBe(target);
+      expect(mockCreateWriteStream).toHaveBeenCalledWith(target);
+    });
+
+    it('should accept a savePath inside the SECOND of two configured roots', async () => {
+      createMockDrive();
+      process.env.GOOGLE_DOCS_DOWNLOAD_ROOTS = [ROOT_B, ROOT_A].join(path.delimiter);
+      const target = path.join(ROOT_A, 'second-root.pdf');
+
+      const result = await toolExecute({ fileId: 'f1', savePath: target }, { log: mockLog });
+
+      expect(JSON.parse(result).savedTo).toBe(target);
+      expect(mockCreateWriteStream).toHaveBeenCalledWith(target);
+    });
+
+    it('should default an omitted savePath to the FIRST configured root, not cwd', async () => {
+      createMockDrive({ name: 'report.pdf', mimeType: 'application/pdf' });
+      process.env.GOOGLE_DOCS_DOWNLOAD_ROOTS = [ROOT_A, ROOT_B].join(path.delimiter);
+
+      const result = await toolExecute({ fileId: 'f1' }, { log: mockLog });
+
+      expect(JSON.parse(result).savedTo).toBe(path.join(ROOT_A, 'report.pdf'));
+    });
+
+    it('should default an omitted savePath for workspace exports to the first root', async () => {
+      createMockDrive({ name: 'My Notes', mimeType: 'application/vnd.google-apps.document' });
+      process.env.GOOGLE_DOCS_DOWNLOAD_ROOTS = ROOT_A;
+
+      const result = await toolExecute({ fileId: 'f1' }, { log: mockLog });
+
+      expect(JSON.parse(result).savedTo).toBe(path.join(ROOT_A, 'My Notes.md'));
+    });
+
+    it('should surface a misconfigured root and mutate nothing', async () => {
+      createMockDrive();
+      process.env.GOOGLE_DOCS_DOWNLOAD_ROOTS = 'relative/not/absolute';
+
+      await expect(
+        toolExecute({ fileId: 'f1', savePath: path.join(ROOT_A, 'report.pdf') }, { log: mockLog })
+      ).rejects.toThrow(/GOOGLE_DOCS_DOWNLOAD_ROOTS/);
+
+      expect(mockMkdirSync).not.toHaveBeenCalled();
+      expect(mockCreateWriteStream).not.toHaveBeenCalled();
+      expect(mockUnlinkSync).not.toHaveBeenCalled();
+    });
+
+    it('should reject a savePath that escapes a root through a symlinked directory', async () => {
+      // Real directories and a real symlink: node:fs/promises is not mocked, and
+      // the node:fs mock leaves realpathSync as the genuine implementation, so
+      // this exercises the ancestor-realpath walk end to end.
+      createMockDrive();
+      const root = path.join(ROOT_A, 'gdocs-symlink-root');
+      const outside = path.join(ROOT_A, 'gdocs-symlink-outside');
+
+      await realFs.rm(root, { recursive: true, force: true });
+      await realFs.rm(outside, { recursive: true, force: true });
+      await realFs.mkdir(root, { recursive: true });
+      await realFs.mkdir(outside, { recursive: true });
+      // 'junction' keeps this working on Windows without elevation; the type
+      // argument is ignored on POSIX.
+      await realFs.symlink(outside, path.join(root, 'escape'), 'junction');
+
+      try {
+        process.env.GOOGLE_DOCS_DOWNLOAD_ROOTS = root;
+
+        await expect(
+          toolExecute(
+            { fileId: 'f1', savePath: path.join(root, 'escape', 'evil.txt') },
+            { log: mockLog }
+          )
+        ).rejects.toThrow(UserError);
+
+        expect(mockMkdirSync).not.toHaveBeenCalled();
+        expect(mockCreateWriteStream).not.toHaveBeenCalled();
+        expect(mockUnlinkSync).not.toHaveBeenCalled();
+
+        // Control: a sibling path inside the real root is still accepted, so the
+        // rejection above is about the symlink, not about the root being broken.
+        const legit = path.join(root, 'fine.pdf');
+        const result = await toolExecute({ fileId: 'f1', savePath: legit }, { log: mockLog });
+        expect(JSON.parse(result).savedTo).toBe(legit);
+      } finally {
+        await realFs.rm(root, { recursive: true, force: true });
+        await realFs.rm(outside, { recursive: true, force: true });
+      }
+    });
+
+    it('should stay permissive when the variable is unset', async () => {
+      createMockDrive();
+      delete process.env.GOOGLE_DOCS_DOWNLOAD_ROOTS;
+      const outside = path.resolve(path.sep, 'tmp', 'anywhere', 'report.pdf');
+
+      const result = await toolExecute({ fileId: 'f1', savePath: outside }, { log: mockLog });
+
+      expect(JSON.parse(result).savedTo).toBe(outside);
+      expect(mockCreateWriteStream).toHaveBeenCalledWith(outside);
     });
   });
 
