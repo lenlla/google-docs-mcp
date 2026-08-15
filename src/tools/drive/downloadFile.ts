@@ -7,6 +7,8 @@ import { pipeline } from 'node:stream/promises';
 import { getDriveClient } from '../../clients.js';
 import { requestClients } from '../../remoteWrapper.js';
 import { createDownloadToken } from '../../downloadProxy.js';
+import { getDownloadRoots } from '../../config.js';
+import { assertWithinRoots } from './pathContainment.js';
 
 const isRemote = process.env.MCP_TRANSPORT === 'httpStream';
 
@@ -46,14 +48,43 @@ function isWorkspaceMimeType(mime: string): boolean {
   return mime.startsWith('application/vnd.google-apps.');
 }
 
+/**
+ * Resolves symlinks on the nearest EXISTING ancestor of `target`, then re-joins
+ * the trailing segments that do not exist yet.
+ *
+ * A download destination normally does not exist, so `realpathSync(target)`
+ * would simply throw; walking up until a path resolves keeps symlinked parent
+ * directories from being used to step outside a configured root. Returns the
+ * input unchanged when nothing along the chain resolves.
+ */
+function resolveThroughExistingAncestor(target: string): string {
+  const trailing: string[] = [];
+  let current = target;
+
+  for (;;) {
+    try {
+      return path.resolve(fs.realpathSync(current), ...trailing);
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) return target; // reached the filesystem root
+      trailing.unshift(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
 const DownloadFileParameters = z.strictObject({
   fileId: z.string().describe('The file ID from a Google Drive URL or previous tool result.'),
   savePath: z
     .string()
     .optional()
     .describe(
-      'Local file path to save the downloaded file to. Parent directories are created automatically. ' +
-        "If omitted, saves to the current working directory using the file's original name " +
+      'Local file path to save the downloaded file to. ' +
+        'When GOOGLE_DOCS_DOWNLOAD_ROOTS is set, the path must resolve inside one of the ' +
+        'configured root directories or the download is rejected; missing parent directories ' +
+        'are then created for you. ' +
+        'If omitted, saves to the first configured root -- or, when GOOGLE_DOCS_DOWNLOAD_ROOTS ' +
+        "is unset, the current working directory -- using the file's original name " +
         '(with an appropriate extension for exported Google Workspace files).'
     ),
   exportMimeType: z
@@ -229,19 +260,31 @@ export function register(server: FastMCP) {
         }
 
         // ---------- Stdio mode: write to local disk ----------
+        const downloadRoots = getDownloadRoots();
+
         resolvedSavePath = args.savePath;
         if (resolvedSavePath) resolvedSavePath = path.resolve(resolvedSavePath);
 
         if (!resolvedSavePath) {
+          // With roots configured the default destination must itself be legal,
+          // so fall back to the first root instead of cwd.
+          const defaultBase = downloadRoots[0] ?? process.cwd();
           if (isWorkspace && exportMime) {
             const baseName = path.parse(fileName).name;
             const ext = EXPORT_MIME_TO_EXTENSION[exportMime] || '';
-            resolvedSavePath = path.join(process.cwd(), baseName + ext);
+            resolvedSavePath = path.join(defaultBase, baseName + ext);
           } else {
-            resolvedSavePath = path.join(process.cwd(), fileName);
+            resolvedSavePath = path.join(defaultBase, fileName);
           }
         }
         resolvedSavePath = path.resolve(resolvedSavePath);
+
+        // Containment check runs BEFORE any filesystem mutation -- mkdirSync
+        // with { recursive: true } is itself a capability, so a rejected write
+        // must not have created directories first.
+        if (downloadRoots.length > 0) {
+          assertWithinRoots(resolveThroughExistingAncestor(resolvedSavePath), downloadRoots);
+        }
 
         fs.mkdirSync(path.dirname(resolvedSavePath), { recursive: true });
 
@@ -289,9 +332,16 @@ export function register(server: FastMCP) {
       } catch (error: any) {
         if (!isRemote && resolvedSavePath) {
           try {
+            // Re-check containment: this cleanup is an unlink of a
+            // caller-influenced path, so it must obey the same allowlist as the
+            // write it is cleaning up after.
+            const cleanupRoots = getDownloadRoots();
+            if (cleanupRoots.length > 0) {
+              assertWithinRoots(resolveThroughExistingAncestor(resolvedSavePath), cleanupRoots);
+            }
             fs.unlinkSync(resolvedSavePath);
           } catch {
-            /* file may not exist yet */
+            /* outside the configured roots, or the file may not exist yet */
           }
         }
         log.error(`Error downloading file ${args.fileId}: ${error.message || error}`);

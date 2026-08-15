@@ -23,8 +23,20 @@ FastMCP server with 94 tools for Google Docs, Sheets, Drive, Gmail, and Calendar
 
 The server supports Google Shared Drives. All Drive file operations (`files.list`, `files.get`, `files.create`, `files.update`, `files.copy`, `files.delete`, `permissions.create`) use `supportsAllDrives: true` and `includeItemsFromAllDrives: true` (for list operations), enabling agents to query, create, and update documents in shared drives.
 
+## downloadFile Containment
+
+`downloadFile` (stdio mode) writes bytes to a caller-supplied `savePath`. An optional allowlist bounds where those writes may land:
+
+- **`GOOGLE_DOCS_DOWNLOAD_ROOTS` unset (default):** permissive — any absolute `savePath` is accepted, and an omitted `savePath` falls back to `process.cwd()`. Unchanged from previous versions.
+- **`GOOGLE_DOCS_DOWNLOAD_ROOTS` set:** a list of absolute directories separated by the platform delimiter (`;` on Windows, `:` on POSIX). A `savePath` that resolves outside every configured root is rejected with a `UserError` **before** any filesystem mutation — no `mkdirSync`, no write stream, no unlink. An omitted `savePath` defaults to the **first** configured root instead of `process.cwd()`.
+
+The check itself lives in `src/tools/drive/pathContainment.ts` as a pure `isWithinRoots(target, roots, pathImpl)` (plus a throwing `assertWithinRoots`) — no fs, no `process.env`, path implementation injected so both platforms' semantics are testable anywhere. Containment is decided with `path.relative` + an `isAbsolute`/`..` check, never `startsWith`, which is wrong for Windows drive letters and UNC paths and false-positives on sibling directories (`/data` vs `/data-backup`).
+
+Filesystem-dependent work stays in `downloadFile.ts`: roots are realpath-resolved when parsed by `getDownloadRoots()` in `src/config.ts`, and the target is realpath-resolved through its nearest existing ancestor so a symlinked parent directory cannot step outside a root. The error-path `unlinkSync` is guarded by the same check.
+
 ## Known Limitations
 
+- **downloadFile containment:** off by default. Set `GOOGLE_DOCS_DOWNLOAD_ROOTS` to bound writes; the default stays permissive for backward compatibility.
 - **Comment anchoring:** Programmatically created comments appear in "All Comments" but aren't visibly anchored to text in the UI
 - **Resolved status:** May not persist in Google Docs UI (Drive API limitation)
 - **fixListFormatting:** Experimental, may not work reliably
