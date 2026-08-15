@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { docs_v1 } from 'googleapis';
 import { getDocsClient } from '../../clients.js';
 import { DocumentIdParameter } from '../../types.js';
+import { getDefaultWriteMode } from '../../config.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
 
 const FindAndReplaceParameters = DocumentIdParameter.extend({
@@ -19,6 +20,12 @@ const FindAndReplaceParameters = DocumentIdParameter.extend({
     .string()
     .optional()
     .describe('Scope replacement to a specific tab. If omitted, replaces across all tabs.'),
+  editMode: z
+    .enum(['direct', 'suggest'])
+    .optional()
+    .describe(
+      "How the change is written: 'direct' commits it immediately; 'suggest' leaves it as a pending suggested edit. Defaults to the GOOGLE_DOCS_WRITE_MODE environment variable, or 'direct' when that is unset. Suggest mode requires the Google Workspace Developer Preview Program."
+    ),
 });
 
 export function register(server: FastMCP) {
@@ -30,6 +37,7 @@ export function register(server: FastMCP) {
     parameters: FindAndReplaceParameters,
     execute: async (args, { log }) => {
       const docs = await getDocsClient();
+      const writeMode = args.editMode ?? getDefaultWriteMode();
       log.info(
         `findAndReplace in doc ${args.documentId}: "${args.findText}" → "${args.replaceText}"` +
           `${args.matchCase ? ' (case-sensitive)' : ''}` +
@@ -48,7 +56,9 @@ export function register(server: FastMCP) {
           },
         };
 
-        const response = await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request]);
+        const response = await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request], {
+          writeMode,
+        });
         const changed = response.replies?.[0]?.replaceAllText?.occurrencesChanged ?? 0;
 
         return `Replaced ${changed} occurrence(s) of "${args.findText}" with "${args.replaceText}".`;

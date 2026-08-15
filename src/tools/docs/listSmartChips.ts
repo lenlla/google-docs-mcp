@@ -3,6 +3,7 @@ import { UserError } from 'fastmcp';
 import { z } from 'zod';
 import { getDocsClient } from '../../clients.js';
 import { DocumentIdParameter } from '../../types.js';
+import { getDocument } from '../../googleDocsApiHelpers.js';
 import { extractSmartChips } from './smartChipHelpers.js';
 import { SMART_CHIP_BODY_FIELDS, buildDocumentGetFields } from './tabFieldMasks.js';
 
@@ -26,7 +27,7 @@ export function register(server: FastMCP) {
       );
 
       try {
-        const res = await docs.documents.get({
+        const res = await getDocument(docs, {
           documentId: args.documentId,
           ...(args.tabId && { includeTabsContent: true }),
           fields: buildDocumentGetFields(SMART_CHIP_BODY_FIELDS, args.tabId),

@@ -3,6 +3,7 @@ import { UserError } from 'fastmcp';
 import { z } from 'zod';
 import { getDocsClient } from '../../clients.js';
 import { DocumentIdParameter } from '../../types.js';
+import { getDefaultWriteMode } from '../../config.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
 import { getTableById } from './structureHelpers.js';
 import { TABLE_CONTENT_BASIC_BODY_FIELDS, buildDocumentGetFields } from './tabFieldMasks.js';
@@ -25,15 +26,22 @@ export function register(server: FastMCP) {
         .describe(
           'The ID of the specific tab containing the table. If not specified, uses the first tab or legacy document body.'
         ),
+      editMode: z
+        .enum(['direct', 'suggest'])
+        .optional()
+        .describe(
+          "How the change is written: 'direct' commits it immediately; 'suggest' leaves it as a pending suggested edit. Defaults to the GOOGLE_DOCS_WRITE_MODE environment variable, or 'direct' when that is unset. Suggest mode requires the Google Workspace Developer Preview Program."
+        ),
     }),
     execute: async (args, { log }) => {
       const docs = await getDocsClient();
+      const writeMode = args.editMode ?? getDefaultWriteMode();
       log.info(
         `Deleting ${args.rowCount} row(s) from ${args.tableId} in doc ${args.documentId}${args.tabId ? ` (tab: ${args.tabId})` : ''}`
       );
 
       try {
-        const res = await docs.documents.get({
+        const res = await GDocsHelpers.getDocument(docs, {
           documentId: args.documentId,
           ...(args.tabId && { includeTabsContent: true }),
           fields: buildDocumentGetFields(TABLE_CONTENT_BASIC_BODY_FIELDS, args.tabId),
@@ -63,7 +71,7 @@ export function register(server: FastMCP) {
           );
         }
 
-        await GDocsHelpers.executeBatchUpdate(docs, args.documentId, requests);
+        await GDocsHelpers.executeBatchUpdate(docs, args.documentId, requests, { writeMode });
         return `Successfully deleted ${args.rowCount} row(s) from table ${args.tableId}.`;
       } catch (error: any) {
         log.error(

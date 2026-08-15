@@ -6,6 +6,7 @@ import { DocumentIdParameter, MarkdownConversionError } from '../../types.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
 import { insertMarkdown, formatInsertResult } from '../../markdown-transformer/index.js';
 import { TAB_BODY_RANGE_FIELDS } from '../docs/tabFieldMasks.js';
+import { collectSuggestions } from '../docs/suggestionHelpers.js';
 
 export function register(server: FastMCP) {
   server.addTool({
@@ -36,6 +37,13 @@ export function register(server: FastMCP) {
         .describe(
           'If true (default), the first H1 heading (# ...) in the markdown is styled as a Google Docs TITLE instead of Heading 1. Useful when the markdown represents a full document whose first line is the document title. Set to false if the first H1 should remain a Heading 1.'
         ),
+      allowDiscardingSuggestions: z
+        .boolean()
+        .optional()
+        .default(false)
+        .describe(
+          'By default this tool refuses to run when the target document or tab has pending suggested edits, because replacing the whole body destroys them. Set to true to override that refusal and discard the suggestions deliberately.'
+        ),
     }),
     execute: async (args, { log }) => {
       const docs = await getDocsClient();
@@ -44,11 +52,31 @@ export function register(server: FastMCP) {
       );
 
       try {
+        // 0. Refuse to run over pending suggestions.
+        //    This tool deletes the entire body and rewrites it. Any pending
+        //    suggested edit in that range is destroyed by the delete — there is no
+        //    view mode that makes that safe, so the only safe answer is to stop and
+        //    make the caller resolve or reject the suggestions first.
+        if (!args.allowDiscardingSuggestions) {
+          const scan = await GDocsHelpers.getDocument(docs, {
+            documentId: args.documentId,
+            includeTabsContent: true,
+          });
+          const pending = collectSuggestions(scan.data, args.tabId);
+          if (pending.length > 0) {
+            throw new UserError(
+              `Refusing to replace ${args.tabId ? `tab ${args.tabId} of ` : ''}document ${args.documentId}: ` +
+                `it has ${pending.length} pending suggested edit(s), which replacing the body would destroy. ` +
+                `Resolve or reject them first (see listSuggestions, acceptSuggestion, rejectSuggestion), ` +
+                `or pass allowDiscardingSuggestions: true to discard them deliberately.`
+            );
+          }
+        }
+
         // 1. Get document structure
-        const doc = await docs.documents.get({
+        const doc = await GDocsHelpers.getDocument(docs, {
           documentId: args.documentId,
           includeTabsContent: !!args.tabId,
-          suggestionsViewMode: 'PREVIEW_WITHOUT_SUGGESTIONS',
           fields: args.tabId ? TAB_BODY_RANGE_FIELDS : 'body(content(startIndex,endIndex))',
         });
 
@@ -110,10 +138,9 @@ export function register(server: FastMCP) {
         //    text styles from the survivor before inserting.
         {
           // Re-read to get the survivor's endIndex (always a short document now)
-          const docAfterDelete = await docs.documents.get({
+          const docAfterDelete = await GDocsHelpers.getDocument(docs, {
             documentId: args.documentId,
             includeTabsContent: !!args.tabId,
-            suggestionsViewMode: 'PREVIEW_WITHOUT_SUGGESTIONS',
             fields: args.tabId ? TAB_BODY_RANGE_FIELDS : 'body(content(startIndex,endIndex))',
           });
 

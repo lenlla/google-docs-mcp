@@ -48,10 +48,9 @@ export function register(server: FastMCP) {
             ? '*' // Get everything for structure analysis
             : 'body(content(paragraph(elements(textRun(content)))))'; // Just text content
 
-        const res = await docs.documents.get({
+        const res = await GDocsHelpers.getDocument(docs, {
           documentId: args.documentId,
           includeTabsContent: needsTabsContent,
-          suggestionsViewMode: 'PREVIEW_WITHOUT_SUGGESTIONS',
           fields: needsTabsContent
             ? `title,documentId,${buildTabsFieldMask('documentTab(body,documentStyle,namedStyles,lists)')}`
             : fields,

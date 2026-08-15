@@ -11,11 +11,86 @@ type Docs = docs_v1.Docs; // Alias for convenience
 // --- Constants ---
 const MAX_BATCH_UPDATE_REQUESTS = 50; // Google API limits batch size
 
+/**
+ * The `suggestionsViewMode` every document read defaults to.
+ *
+ * `SUGGESTIONS_INLINE` is the index space `documents.batchUpdate` operates on.
+ * For a user with edit access `DEFAULT_FOR_CURRENT_ACCESS` already resolves to
+ * this view, but stating it explicitly makes the behaviour deterministic
+ * regardless of the caller's access level — which matters because every index
+ * this server computes (findTextRange, getParagraphRange, getTableCellRange, …)
+ * must be computed against the same view the write will land in. Reading one
+ * view and writing another is how documents get corrupted.
+ */
+export const DEFAULT_SUGGESTIONS_VIEW_MODE = 'SUGGESTIONS_INLINE';
+
+/**
+ * The single chokepoint for reading a document.
+ *
+ * Every `documents.get` in this server goes through here so that reads and
+ * writes share one index space. `params` is the untouched
+ * `Params$Resource$Documents$Get` the call site would have passed directly —
+ * `fields` masks and `includeTabsContent` are preserved verbatim. The only
+ * thing this adds is `suggestionsViewMode`, and only when the caller has not
+ * chosen one itself.
+ *
+ * @param docs   - Authenticated Docs client
+ * @param params - Exactly the parameters the Docs `documents.get` method accepts
+ */
+export async function getDocument(docs: Docs, params: docs_v1.Params$Resource$Documents$Get) {
+  if (params.suggestionsViewMode != null) {
+    return docs.documents.get(params);
+  }
+  return docs.documents.get({ ...params, suggestionsViewMode: DEFAULT_SUGGESTIONS_VIEW_MODE });
+}
+
+/** How a batch update is written: committed directly, or left as a suggestion. */
+export type WriteMode = 'direct' | 'suggest';
+
+/** Options accepted by the batch-update helpers. */
+export interface BatchUpdateOptions {
+  /**
+   * `'suggest'` adds `writeControl: { writeMode: 'SUGGEST' }` to the request so
+   * the edit lands as a pending suggestion instead of a committed change.
+   * Defaults to `'direct'`. This is always supplied as an explicit argument by
+   * the calling tool — these helpers never consult the environment.
+   */
+  writeMode?: WriteMode;
+}
+
+/**
+ * Appended to the error surfaced when a SUGGEST-mode batch update fails, because
+ * the overwhelmingly likely cause is that the account is not enrolled in the
+ * preview program that gates the feature.
+ */
+const SUGGEST_MODE_FAILURE_HINT =
+  'writeMode SUGGEST is gated on the Google Workspace Developer Preview Program. ' +
+  'If this account is not enrolled, retry with editMode="direct".';
+
+/**
+ * Builds the `batchUpdate` request body, adding `writeControl` only for suggest
+ * mode — a direct write must send no `writeControl` key at all.
+ */
+function buildBatchUpdateRequestBody(
+  requests: docs_v1.Schema$Request[],
+  options?: BatchUpdateOptions
+): docs_v1.Schema$BatchUpdateDocumentRequest {
+  if (options?.writeMode !== 'suggest') {
+    return { requests };
+  }
+  // `writeMode` is part of the same Developer Preview surface as the accept /
+  // reject suggestion requests and is not yet in the published googleapis
+  // types, so WriteControl is constructed and cast here at its single use.
+  const writeControl = { writeMode: 'SUGGEST' } as unknown as docs_v1.Schema$WriteControl;
+  return { requests, writeControl };
+}
+
 // --- Core Helper to Execute Batch Updates ---
 export async function executeBatchUpdate(
   docs: Docs,
   documentId: string,
-  requests: docs_v1.Schema$Request[]
+  requests: docs_v1.Schema$Request[],
+  options?: BatchUpdateOptions
 ): Promise<docs_v1.Schema$BatchUpdateDocumentResponse> {
   if (!requests || requests.length === 0) {
     // console.warn("executeBatchUpdate called with no requests.");
@@ -32,13 +107,22 @@ export async function executeBatchUpdate(
   try {
     const response = await docs.documents.batchUpdate({
       documentId: documentId,
-      requestBody: { requests },
+      requestBody: buildBatchUpdateRequestBody(requests, options),
     });
     return response.data;
   } catch (error: any) {
     logger.error(
       `Google API batchUpdate Error for doc ${documentId}: ${error.message || 'Unknown error'}`
     );
+    // A suggest-mode failure gets its own message: this helper is the only place
+    // that both knows the option was set and sees the failure. The option arrived
+    // as an argument, so this reads nothing from the environment.
+    if (options?.writeMode === 'suggest') {
+      throw new UserError(
+        `Suggest-mode edit failed for document ${documentId}: ${error.message || 'Unknown error'}. ` +
+          SUGGEST_MODE_FAILURE_HINT
+      );
+    }
     // Translate common API errors to UserErrors
     if (error.code === 400 && error.message.includes('Invalid requests')) {
       // Try to extract more specific info if available
@@ -88,13 +172,15 @@ export interface BatchUpdateMetadata {
  * @param documentId - The document ID
  * @param requests - Array of requests to execute
  * @param log - Optional logger for progress tracking
+ * @param options - Write options (e.g. suggest mode); passed to every sub-batch
  * @returns Metadata about the execution (request counts, API calls, timing)
  */
 export async function executeBatchUpdateWithSplitting(
   docs: Docs,
   documentId: string,
   requests: docs_v1.Schema$Request[],
-  log?: { info: (msg: string) => void }
+  log?: { info: (msg: string) => void },
+  options?: BatchUpdateOptions
 ): Promise<BatchUpdateMetadata> {
   const overallStart = performance.now();
 
@@ -149,7 +235,7 @@ export async function executeBatchUpdateWithSplitting(
       if (log) {
         log.info(`Delete batch content: ${JSON.stringify(batch)}`);
       }
-      await executeBatchUpdate(docs, documentId, batch);
+      await executeBatchUpdate(docs, documentId, batch, options);
       totalApiCalls++;
       if (log) {
         const batchNum = Math.floor(i / MAX_BATCH) + 1;
@@ -168,7 +254,7 @@ export async function executeBatchUpdateWithSplitting(
   if (insertRequests.length > 0) {
     for (let i = 0; i < insertRequests.length; i += MAX_BATCH) {
       const batch = insertRequests.slice(i, i + MAX_BATCH);
-      await executeBatchUpdate(docs, documentId, batch);
+      await executeBatchUpdate(docs, documentId, batch, options);
       totalApiCalls++;
       if (log) {
         const batchNum = Math.floor(i / MAX_BATCH) + 1;
@@ -184,7 +270,7 @@ export async function executeBatchUpdateWithSplitting(
   if (formatRequests.length > 0) {
     for (let i = 0; i < formatRequests.length; i += MAX_BATCH) {
       const batch = formatRequests.slice(i, i + MAX_BATCH);
-      await executeBatchUpdate(docs, documentId, batch);
+      await executeBatchUpdate(docs, documentId, batch, options);
       totalApiCalls++;
       if (log) {
         const batchNum = Math.floor(i / MAX_BATCH) + 1;
@@ -234,7 +320,7 @@ export async function findTextRange(
     // Request more detailed information about the document structure
     // When tabId is specified, we need to use includeTabsContent to access tab-specific content
     const needsTabsContent = !!tabId;
-    const res = await docs.documents.get({
+    const res = await getDocument(docs, {
       documentId,
       ...(needsTabsContent && { includeTabsContent: true }),
       // Request more fields to handle various container types (not just paragraphs)
@@ -430,7 +516,7 @@ export async function findElements(
 
   let res;
   try {
-    res = await docs.documents.get({
+    res = await getDocument(docs, {
       documentId,
       fields:
         'body(content(startIndex,endIndex,table(rows,columns,tableRows(tableCells(content(paragraph(elements(startIndex,endIndex,textRun(content))))))),paragraph(elements(startIndex,endIndex,textRun(content)))))',
@@ -594,7 +680,7 @@ export async function getParagraphRange(
     // When tabId is specified, we need to use includeTabsContent to access tab-specific content
     const needsTabsContent = !!tabId;
     // Request more detailed document structure to handle nested elements
-    const res = await docs.documents.get({
+    const res = await getDocument(docs, {
       documentId,
       ...(needsTabsContent && { includeTabsContent: true }),
       // Request more comprehensive structure information
@@ -1106,7 +1192,8 @@ export async function insertText(
   docs: Docs,
   documentId: string,
   text: string,
-  index: number
+  index: number,
+  options?: BatchUpdateOptions
 ): Promise<docs_v1.Schema$BatchUpdateDocumentResponse> {
   if (!text) return {}; // Nothing to insert
   const request: docs_v1.Schema$Request = {
@@ -1115,7 +1202,7 @@ export async function insertText(
       text: text,
     },
   };
-  return executeBatchUpdate(docs, documentId, [request]);
+  return executeBatchUpdate(docs, documentId, [request], options);
 }
 
 // --- Table Cell Helper ---
@@ -1132,7 +1219,7 @@ export async function getTableCellRange(
   columnIndex: number,
   tabId?: string
 ): Promise<{ startIndex: number; endIndex: number }> {
-  const res = await docs.documents.get({
+  const res = await getDocument(docs, {
     documentId,
     ...(tabId && { includeTabsContent: true }),
   });
@@ -1585,7 +1672,7 @@ export function findTabById(
  * a documentTab body. Returns the resolved `docs_v1.Schema$Tab`.
  *
  * This replaces the repeated pattern:
- *   docs.documents.get({ includeTabsContent: true, fields: buildTabsFieldMask(...) })
+ *   getDocument(docs, { includeTabsContent: true, fields: buildTabsFieldMask(...) })
  *   + findTabById() + two UserError throws
  *
  * @param docs     - Authenticated Docs client
@@ -1599,10 +1686,9 @@ export async function getDocumentTab(
   tabId: string,
   documentTabFields: string = 'documentTab(body(content(endIndex)))'
 ): Promise<docs_v1.Schema$Tab> {
-  const res = await docs.documents.get({
+  const res = await getDocument(docs, {
     documentId,
     includeTabsContent: true,
-    suggestionsViewMode: 'PREVIEW_WITHOUT_SUGGESTIONS',
     fields: buildTabsFieldMask(documentTabFields),
   });
   const tab = findTabById(res.data, tabId);
@@ -1630,10 +1716,9 @@ export async function getAppendIndex(
   tabId?: string
 ): Promise<number> {
   const needsTabsContent = !!tabId;
-  const res = await docs.documents.get({
+  const res = await getDocument(docs, {
     documentId,
     ...(needsTabsContent && { includeTabsContent: true }),
-    suggestionsViewMode: 'PREVIEW_WITHOUT_SUGGESTIONS',
     fields: needsTabsContent
       ? buildTabsFieldMask('documentTab(body(content(endIndex)))')
       : 'body(content(endIndex))',

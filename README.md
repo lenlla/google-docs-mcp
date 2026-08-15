@@ -111,6 +111,9 @@ Tools across Google Docs, Sheets, and Drive:
 | `insertSectionBreak`          | Insert section break (NEXT_PAGE or CONTINUOUS)                        |
 | `updateSectionStyle`          | Update section style: flip orientation, margins                       |
 | `insertImage`                 | Insert images from URLs or local files                                |
+| `listSuggestions`             | List pending suggested edits with their IDs and ranges                |
+| `acceptSuggestion`            | Accept a pending suggested edit                                       |
+| `rejectSuggestion`            | Reject a pending suggested edit                                       |
 
 ### Comments
 
@@ -310,6 +313,41 @@ The server supports a full round-trip markdown workflow:
 
 Supported: headings, bold, italic, strikethrough, links, bullet/numbered lists, horizontal rules.
 
+### Suggested edits
+
+Google Docs suggestions are first-class here, in two directions.
+
+**Reads reflect them.** Every document read this server makes goes through one helper
+that asks the API for the `SUGGESTIONS_INLINE` view — the same index space
+`documents.batchUpdate` writes into. This is a behaviour change: `readDocument`,
+`appendText` and `appendMarkdown` now show pending suggested edits inline, where
+previously they showed the document as if every suggestion were rejected. The reason is
+correctness, not features: index-computing helpers such as `findTextRange` never passed a
+view mode and so already read the suggestions-inline view, which meant an index computed
+by one code path could be applied to text produced by another. Use `listSuggestions` to
+see what is pending, and `acceptSuggestion` / `rejectSuggestion` to clear it.
+
+`replaceDocumentWithMarkdown` refuses to run when the target document or tab has pending
+suggestions, because replacing the whole body destroys them. Resolve them first, or pass
+`allowDiscardingSuggestions: true` to discard them deliberately.
+
+**Writes can create them.** These tools accept an `editMode` parameter of `direct`
+(default) or `suggest`:
+
+`insertText`, `appendText`, `findAndReplace`, `modifyText`, `replaceTableRowData`,
+`applyTextStyle`, `applyParagraphStyle`, `insertTableWithData`, `appendTableRows`,
+`deleteTableRows`.
+
+Set `GOOGLE_DOCS_WRITE_MODE=suggest` to change the default for those tools; a per-call
+`editMode` always wins. Any other value for the variable is an error rather than a silent
+fallback. The setting applies only to the tools listed above — the Docs API cannot suggest
+section styles, column widths, named ranges or tab operations, so those tools always write
+directly.
+
+> **Note:** `writeMode: SUGGEST` and the accept/reject requests are part of the Google
+> Workspace Developer Preview Program. Without enrolment the API rejects them, and the
+> error you get back says so.
+
 ### Live Docs Verification
 
 The repository includes an opt-in live integration test for `cloneTable` against the real Google Docs API. It is skipped by default.
@@ -352,6 +390,7 @@ Visit the server root URL (`/`) for setup instructions and a ready-to-copy clien
 | `GCLOUD_PROJECT`             | GCP project ID for Firestore (required when `TOKEN_STORE=firestore`)                                                                                                                                                                                                                        |
 | `MCP_STATELESS`              | Set to `true` for serverless deployments (Cloud Run, etc.) — disables session tracking to survive scale-to-zero                                                                                                                                                                             |
 | `GOOGLE_DOCS_DOWNLOAD_ROOTS` | Optional allowlist of absolute directories `downloadFile` may write into, separated by `;` (Windows) or `:` (POSIX). Unset (default) = unrestricted. When set, a `savePath` outside every root is rejected before anything is written, and an omitted `savePath` defaults to the first root |
+| `GOOGLE_DOCS_WRITE_MODE`     | Default write mode for the suggest-capable Docs tools: `direct` (default) or `suggest`. See [Suggested edits](#suggested-edits)                                                                                                                                                             |
 
 ### Setup
 
@@ -491,6 +530,7 @@ Without `GOOGLE_MCP_PROFILE`, behavior is unchanged.
 - **Comment resolution:** Resolved status may not persist in the Google Docs UI.
 - **Converted documents:** Docs converted from Word may not support all API operations.
 - **Markdown images:** Not yet supported in the markdown-to-Docs conversion.
+- **Suggestion listing scope:** `listSuggestions` covers body content including tables. Suggestions in headers, footers and footnotes, and style-only suggestions, are not reported. Suggestion authors are not resolvable through this API surface.
 - **Deeply nested lists:** Lists with 3+ nesting levels may have formatting quirks.
 - **Gmail hard delete:** `trashMessage` moves messages to Trash (reversible). Permanent deletion requires the broader `https://mail.google.com/` scope and is not exposed in v0.1.
 - **Gmail attachments:** `getMessage` returns attachment metadata but does not download attachment bytes yet.

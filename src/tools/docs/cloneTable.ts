@@ -75,7 +75,7 @@ export function register(server: FastMCP) {
       );
 
       try {
-        const sourceRes = await docs.documents.get({
+        const sourceRes = await GDocsHelpers.getDocument(docs, {
           documentId: args.sourceDocumentId,
           ...(args.sourceTabId && { includeTabsContent: true }),
           fields: buildDocumentGetFields(CLONE_TABLE_SOURCE_BODY_FIELDS, args.sourceTabId),
@@ -110,7 +110,7 @@ export function register(server: FastMCP) {
           log
         );
 
-        const targetRes = await docs.documents.get({
+        const targetRes = await GDocsHelpers.getDocument(docs, {
           documentId: args.documentId,
           ...(args.targetTabId && { includeTabsContent: true }),
           fields: buildDocumentGetFields(CLONE_TABLE_TARGET_BODY_FIELDS, args.targetTabId),

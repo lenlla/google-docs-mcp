@@ -6,6 +6,7 @@ import { getDocsClient } from '../../clients.js';
 import { DocumentIdParameter, TextFindParameter, TextStyleParameters } from '../../types.js';
 import type { TextStyleArgs } from '../../types.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
+import { getDefaultWriteMode } from '../../config.js';
 
 const RangeTarget = z
   .object({
@@ -32,6 +33,12 @@ const ModifyTextParameters = DocumentIdParameter.extend({
     .optional()
     .describe(
       'The ID of the specific tab to operate on. If not specified, operates on the first tab.'
+    ),
+  editMode: z
+    .enum(['direct', 'suggest'])
+    .optional()
+    .describe(
+      "How the change is written: 'direct' commits it immediately; 'suggest' leaves it as a pending suggested edit. Defaults to the GOOGLE_DOCS_WRITE_MODE environment variable, or 'direct' when that is unset. Suggest mode requires the Google Workspace Developer Preview Program."
     ),
 })
   .refine((args) => args.text !== undefined || args.style !== undefined, {
@@ -113,6 +120,7 @@ export function register(server: FastMCP) {
     parameters: ModifyTextParameters,
     execute: async (args, { log }) => {
       const docs = await getDocsClient();
+      const writeMode = args.editMode ?? getDefaultWriteMode();
       log.info(
         `modifyText on doc ${args.documentId}: target=${JSON.stringify(args.target)}` +
           `${args.text !== undefined ? `, text="${args.text.substring(0, 50)}"` : ''}` +
@@ -169,7 +177,7 @@ export function register(server: FastMCP) {
           return 'No operations to perform.';
         }
 
-        await GDocsHelpers.executeBatchUpdate(docs, args.documentId, requests);
+        await GDocsHelpers.executeBatchUpdate(docs, args.documentId, requests, { writeMode });
 
         // Build descriptive result
         const actions: string[] = [];
