@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import realFs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
@@ -492,6 +493,47 @@ describe('downloadFile integration', () => {
       expect(mockMkdirSync).not.toHaveBeenCalled();
       expect(mockCreateWriteStream).not.toHaveBeenCalled();
       expect(mockUnlinkSync).not.toHaveBeenCalled();
+    });
+
+    it('should reject a savePath that escapes a root through a symlinked directory', async () => {
+      // Real directories and a real symlink: node:fs/promises is not mocked, and
+      // the node:fs mock leaves realpathSync as the genuine implementation, so
+      // this exercises the ancestor-realpath walk end to end.
+      createMockDrive();
+      const root = path.join(ROOT_A, 'gdocs-symlink-root');
+      const outside = path.join(ROOT_A, 'gdocs-symlink-outside');
+
+      await realFs.rm(root, { recursive: true, force: true });
+      await realFs.rm(outside, { recursive: true, force: true });
+      await realFs.mkdir(root, { recursive: true });
+      await realFs.mkdir(outside, { recursive: true });
+      // 'junction' keeps this working on Windows without elevation; the type
+      // argument is ignored on POSIX.
+      await realFs.symlink(outside, path.join(root, 'escape'), 'junction');
+
+      try {
+        process.env.GOOGLE_DOCS_DOWNLOAD_ROOTS = root;
+
+        await expect(
+          toolExecute(
+            { fileId: 'f1', savePath: path.join(root, 'escape', 'evil.txt') },
+            { log: mockLog }
+          )
+        ).rejects.toThrow(UserError);
+
+        expect(mockMkdirSync).not.toHaveBeenCalled();
+        expect(mockCreateWriteStream).not.toHaveBeenCalled();
+        expect(mockUnlinkSync).not.toHaveBeenCalled();
+
+        // Control: a sibling path inside the real root is still accepted, so the
+        // rejection above is about the symlink, not about the root being broken.
+        const legit = path.join(root, 'fine.pdf');
+        const result = await toolExecute({ fileId: 'f1', savePath: legit }, { log: mockLog });
+        expect(JSON.parse(result).savedTo).toBe(legit);
+      } finally {
+        await realFs.rm(root, { recursive: true, force: true });
+        await realFs.rm(outside, { recursive: true, force: true });
+      }
     });
 
     it('should stay permissive when the variable is unset', async () => {
