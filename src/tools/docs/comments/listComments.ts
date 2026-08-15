@@ -3,6 +3,7 @@ import { UserError } from 'fastmcp';
 import { google } from 'googleapis';
 import { getDocsClient, getDriveClient, getAuthClient } from '../../../clients.js';
 import { DocumentIdParameter } from '../../../types.js';
+import { getDocument } from '../../../googleDocsApiHelpers.js';
 
 export function register(server: FastMCP) {
   server.addTool({
@@ -17,7 +18,7 @@ export function register(server: FastMCP) {
 
       try {
         // First get the document to have context
-        const doc = await docsClient.documents.get({ documentId: args.documentId });
+        const doc = await getDocument(docsClient, { documentId: args.documentId });
 
         // Use Drive API v3 with proper fields to get quoted content
         const authClient = await getAuthClient();

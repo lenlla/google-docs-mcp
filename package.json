@@ -14,7 +14,7 @@
     "start": "node ./dist/index.js",
     "build": "tsc",
     "test": "vitest run",
-    "test:live:docs": "vitest run src/tools/docs/cloneTable.live.test.ts",
+    "test:live:docs": "vitest run --config vitest.live.config.ts src/tools/docs/cloneTable.live.test.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "prepublishOnly": "npm run build"

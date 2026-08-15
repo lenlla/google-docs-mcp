@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { docs_v1 } from 'googleapis';
 import { getDocsClient } from '../../clients.js';
 import { DocumentIdParameter } from '../../types.js';
+import { getDefaultWriteMode } from '../../config.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
 
 export function register(server: FastMCP) {
@@ -26,9 +27,16 @@ export function register(server: FastMCP) {
         .describe(
           'The ID of the specific tab to insert into. If not specified, inserts into the first tab (or legacy document.body for documents without tabs).'
         ),
+      editMode: z
+        .enum(['direct', 'suggest'])
+        .optional()
+        .describe(
+          "How the change is written: 'direct' commits it immediately; 'suggest' leaves it as a pending suggested edit. Defaults to the GOOGLE_DOCS_WRITE_MODE environment variable, or 'direct' when that is unset. Suggest mode requires the Google Workspace Developer Preview Program."
+        ),
     }),
     execute: async (args, { log }) => {
       const docs = await getDocsClient();
+      const writeMode = args.editMode ?? getDefaultWriteMode();
       log.info(
         `Inserting text in doc ${args.documentId} at index ${args.index}${args.tabId ? ` (tab: ${args.tabId})` : ''}`
       );
@@ -41,10 +49,12 @@ export function register(server: FastMCP) {
           const request: docs_v1.Schema$Request = {
             insertText: { location, text: args.text },
           };
-          await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request]);
+          await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request], { writeMode });
         } else {
           // Use existing helper for backward compatibility
-          await GDocsHelpers.insertText(docs, args.documentId, args.text, args.index);
+          await GDocsHelpers.insertText(docs, args.documentId, args.text, args.index, {
+            writeMode,
+          });
         }
         return `Successfully inserted text at index ${args.index}${args.tabId ? ` in tab ${args.tabId}` : ''}.`;
       } catch (error: any) {

@@ -24,7 +24,7 @@ export function register(server: FastMCP) {
 
       try {
         // Get document with tabs structure
-        const res = await docs.documents.get({
+        const res = await GDocsHelpers.getDocument(docs, {
           documentId: args.documentId,
           includeTabsContent: true,
           // Only get essential fields for tab listing

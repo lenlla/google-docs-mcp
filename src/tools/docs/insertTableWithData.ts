@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { docs_v1 } from 'googleapis';
 import { getDocsClient } from '../../clients.js';
 import { DocumentIdParameter } from '../../types.js';
+import { getDefaultWriteMode } from '../../config.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
 
 // --- Table Index Math ---
@@ -128,9 +129,16 @@ export function register(server: FastMCP) {
           'The ID of the specific tab to insert into. Use listDocumentTabs to get tab IDs. ' +
             'If not specified, inserts into the first tab.'
         ),
+      editMode: z
+        .enum(['direct', 'suggest'])
+        .optional()
+        .describe(
+          "How the change is written: 'direct' commits it immediately; 'suggest' leaves it as a pending suggested edit. Defaults to the GOOGLE_DOCS_WRITE_MODE environment variable, or 'direct' when that is unset. Suggest mode requires the Google Workspace Developer Preview Program."
+        ),
     }),
     execute: async (args, { log }) => {
       const docs = await getDocsClient();
+      const writeMode = args.editMode ?? getDefaultWriteMode();
 
       const numRows = args.data.length;
       const numCols = args.data.reduce((max, row) => Math.max(max, row.length), 0);
@@ -156,7 +164,8 @@ export function register(server: FastMCP) {
           docs,
           args.documentId,
           requests,
-          log
+          log,
+          { writeMode }
         );
 
         return (

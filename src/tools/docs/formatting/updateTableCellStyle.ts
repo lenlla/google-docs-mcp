@@ -47,7 +47,7 @@ export function register(server: FastMCP) {
       );
 
       try {
-        const res = await docs.documents.get({
+        const res = await GDocsHelpers.getDocument(docs, {
           documentId: args.documentId,
           ...(args.tabId && { includeTabsContent: true }),
           fields: buildDocumentGetFields(TABLE_INDEX_BODY_FIELDS, args.tabId),

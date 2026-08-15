@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { google } from 'googleapis';
 import { getDocsClient, getAuthClient } from '../../../clients.js';
 import { DocumentIdParameter } from '../../../types.js';
+import { getDocument } from '../../../googleDocsApiHelpers.js';
 
 export function register(server: FastMCP) {
   server.addTool({
@@ -30,7 +31,7 @@ export function register(server: FastMCP) {
       try {
         // First, get the text content that will be quoted
         const docsClient = await getDocsClient();
-        const doc = await docsClient.documents.get({ documentId: args.documentId });
+        const doc = await getDocument(docsClient, { documentId: args.documentId });
 
         // Extract the quoted text from the document
         let quotedText = '';

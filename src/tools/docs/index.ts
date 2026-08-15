@@ -12,6 +12,11 @@ import { register as modifyText } from './modifyText.js';
 import { register as findAndReplace } from './findAndReplace.js';
 import { register as findElement } from './findElement.js';
 
+// Suggestions
+import { register as listSuggestions } from './listSuggestions.js';
+import { register as acceptSuggestion } from './acceptSuggestion.js';
+import { register as rejectSuggestion } from './rejectSuggestion.js';
+
 // Structure
 import { register as insertTable } from './insertTable.js';
 import { register as insertTableWithData } from './insertTableWithData.js';
@@ -47,6 +52,11 @@ export function registerDocsTools(server: FastMCP) {
   modifyText(server);
   findAndReplace(server);
   findElement(server);
+
+  // Suggestions
+  listSuggestions(server);
+  acceptSuggestion(server);
+  rejectSuggestion(server);
 
   // Structure
   insertTable(server);

@@ -11,7 +11,7 @@ const CODE_FONT_FAMILIES = new Set(['Roboto Mono', 'Courier New', 'Consolas', 'm
 /**
  * Converts Google Docs JSON structure to a markdown string.
  *
- * Accepts the raw response from `docs.documents.get()`, or a subset with
+ * Accepts the raw response from `getDocument()`, or a subset with
  * `{ body, lists }` (e.g. when extracting a specific tab).
  *
  * Handles headings, paragraphs, text formatting (bold, italic, strikethrough,

@@ -7,6 +7,7 @@ import {
   NotImplementedError,
 } from '../../../types.js';
 import * as GDocsHelpers from '../../../googleDocsApiHelpers.js';
+import { getDefaultWriteMode } from '../../../config.js';
 
 export function register(server: FastMCP) {
   server.addTool({
@@ -16,6 +17,7 @@ export function register(server: FastMCP) {
     parameters: ApplyTextStyleToolParameters,
     execute: async (args: ApplyTextStyleToolArgs, { log }) => {
       const docs = await getDocsClient();
+      const writeMode = args.editMode ?? getDefaultWriteMode();
       let { startIndex, endIndex } = args.target as any; // Will be updated if target is text
 
       log.info(
@@ -62,7 +64,9 @@ export function register(server: FastMCP) {
           return 'No valid text styling options were provided.';
         }
 
-        await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [requestInfo.request]);
+        await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [requestInfo.request], {
+          writeMode,
+        });
         return `Successfully applied text style (${requestInfo.fields.join(', ')}) to range ${startIndex}-${endIndex}${args.tabId ? ` in tab ${args.tabId}` : ''}.`;
       } catch (error: any) {
         log.error(`Error applying text style in doc ${args.documentId}: ${error.message || error}`);

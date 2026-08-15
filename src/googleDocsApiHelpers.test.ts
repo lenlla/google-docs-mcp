@@ -1,5 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
-import { findTextRange, getTableCellRange, getParagraphRange } from './googleDocsApiHelpers.js';
+import {
+  findTextRange,
+  getTableCellRange,
+  getParagraphRange,
+  DEFAULT_SUGGESTIONS_VIEW_MODE,
+} from './googleDocsApiHelpers.js';
+import { buildTabsFieldMask } from './tools/docs/tabFieldMasks.js';
 
 describe('Text Range Finding', () => {
   describe('findTextRange', () => {
@@ -36,6 +42,7 @@ describe('Text Range Finding', () => {
       expect(mockDocs.documents.get).toHaveBeenCalledOnce();
       expect(mockDocs.documents.get).toHaveBeenCalledWith({
         documentId: 'doc123',
+        suggestionsViewMode: DEFAULT_SUGGESTIONS_VIEW_MODE,
         fields:
           'body(content(paragraph(elements(startIndex,endIndex,textRun(content))),table,sectionBreak,tableOfContents,startIndex,endIndex))',
       });
@@ -159,13 +166,14 @@ describe('Text Range Finding', () => {
       const result = await findTextRange(mockDocs as any, 'doc123', 'Meeting Notes', 1, 'tab2');
       expect(result).toEqual({ startIndex: 1, endIndex: 14 });
 
-      // Verify includeTabsContent was used
-      expect(mockDocs.documents.get).toHaveBeenCalledWith(
-        expect.objectContaining({
-          documentId: 'doc123',
-          includeTabsContent: true,
-        })
-      );
+      expect(mockDocs.documents.get).toHaveBeenCalledWith({
+        documentId: 'doc123',
+        includeTabsContent: true,
+        suggestionsViewMode: DEFAULT_SUGGESTIONS_VIEW_MODE,
+        fields: buildTabsFieldMask(
+          'documentTab(body(content(paragraph(elements(startIndex,endIndex,textRun(content))),table,sectionBreak,tableOfContents,startIndex,endIndex)))'
+        ),
+      });
     });
 
     it('should throw UserError when tabId is not found', async () => {
@@ -232,12 +240,13 @@ describe('Text Range Finding', () => {
 
       await findTextRange(mockDocs as any, 'doc123', 'test', 1);
 
-      // Should NOT include includeTabsContent
-      expect(mockDocs.documents.get).toHaveBeenCalledWith(
-        expect.not.objectContaining({
-          includeTabsContent: true,
-        })
-      );
+      // Exact shape — proves includeTabsContent is absent, not merely unasserted
+      expect(mockDocs.documents.get).toHaveBeenCalledWith({
+        documentId: 'doc123',
+        suggestionsViewMode: DEFAULT_SUGGESTIONS_VIEW_MODE,
+        fields:
+          'body(content(paragraph(elements(startIndex,endIndex,textRun(content))),table,sectionBreak,tableOfContents,startIndex,endIndex))',
+      });
     });
 
     it('should handle text spanning multiple text runs', async () => {
@@ -366,13 +375,14 @@ describe('Paragraph Range Finding', () => {
       const result = await getParagraphRange(mockDocs as any, 'doc123', 30, 'tab2');
       expect(result).toEqual({ startIndex: 25, endIndex: 50 });
 
-      // Verify includeTabsContent was used
-      expect(mockDocs.documents.get).toHaveBeenCalledWith(
-        expect.objectContaining({
-          documentId: 'doc123',
-          includeTabsContent: true,
-        })
-      );
+      expect(mockDocs.documents.get).toHaveBeenCalledWith({
+        documentId: 'doc123',
+        includeTabsContent: true,
+        suggestionsViewMode: DEFAULT_SUGGESTIONS_VIEW_MODE,
+        fields: buildTabsFieldMask(
+          'documentTab(body(content(startIndex,endIndex,paragraph,table,sectionBreak,tableOfContents)))'
+        ),
+      });
     });
 
     it('should throw UserError when tabId is not found', async () => {

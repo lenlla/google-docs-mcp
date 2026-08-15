@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { docs_v1 } from 'googleapis';
 import { getDocsClient } from '../../clients.js';
 import { DocumentIdParameter, NotImplementedError } from '../../types.js';
+import { getDefaultWriteMode } from '../../config.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
 import { TAB_BODY_END_INDEX_FIELDS } from './tabFieldMasks.js';
 
@@ -27,9 +28,16 @@ export function register(server: FastMCP) {
         .describe(
           'The ID of the specific tab to append to. If not specified, appends to the first tab (or legacy document.body for documents without tabs).'
         ),
+      editMode: z
+        .enum(['direct', 'suggest'])
+        .optional()
+        .describe(
+          "How the change is written: 'direct' commits it immediately; 'suggest' leaves it as a pending suggested edit. Defaults to the GOOGLE_DOCS_WRITE_MODE environment variable, or 'direct' when that is unset. Suggest mode requires the Google Workspace Developer Preview Program."
+        ),
     }),
     execute: async (args, { log }) => {
       const docs = await getDocsClient();
+      const writeMode = args.editMode ?? getDefaultWriteMode();
       log.info(
         `Appending to Google Doc: ${args.documentId}${args.tabId ? ` (tab: ${args.tabId})` : ''}`
       );
@@ -39,10 +47,9 @@ export function register(server: FastMCP) {
         const needsTabsContent = !!args.tabId;
 
         // Get the current end index
-        const docInfo = await docs.documents.get({
+        const docInfo = await GDocsHelpers.getDocument(docs, {
           documentId: args.documentId,
           includeTabsContent: needsTabsContent,
-          suggestionsViewMode: 'PREVIEW_WITHOUT_SUGGESTIONS',
           fields: needsTabsContent
             ? TAB_BODY_END_INDEX_FIELDS
             : 'body(content(endIndex)),documentStyle(pageSize)',
@@ -87,7 +94,7 @@ export function register(server: FastMCP) {
         const request: docs_v1.Schema$Request = {
           insertText: { location, text: textToInsert },
         };
-        await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request]);
+        await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request], { writeMode });
 
         log.info(
           `Successfully appended to doc: ${args.documentId}${args.tabId ? ` (tab: ${args.tabId})` : ''}`

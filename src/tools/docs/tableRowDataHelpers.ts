@@ -75,15 +75,21 @@ export function buildReplaceTableRowRequests(
     );
 }
 
+/**
+ * @param options - Write options. Defaults to a direct write; only the tools that
+ *                  expose an `editMode` parameter ever pass suggest mode, which is
+ *                  what keeps suggest mode from leaking into non-opted-in callers.
+ */
 export async function replaceTableRowData(
   docs: Docs,
   documentId: string,
   table: ExtractedTable,
   rowIndex: number,
   values: string[],
-  tabId?: string
+  tabId?: string,
+  options?: GDocsHelpers.BatchUpdateOptions
 ): Promise<void> {
   const requests = buildReplaceTableRowRequests(table, rowIndex, values, tabId);
   if (requests.length === 0) return;
-  await GDocsHelpers.executeBatchUpdate(docs, documentId, requests);
+  await GDocsHelpers.executeBatchUpdate(docs, documentId, requests, options);
 }

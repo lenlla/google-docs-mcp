@@ -14,7 +14,11 @@ import { docs_v1 } from 'googleapis';
 import { docsJsonToMarkdown } from './docsToMarkdown.js';
 import { convertMarkdownToRequests } from './markdownToDocs.js';
 import type { ConversionOptions } from './markdownToDocs.js';
-import { executeBatchUpdateWithSplitting, findTabById } from '../googleDocsApiHelpers.js';
+import {
+  executeBatchUpdateWithSplitting,
+  findTabById,
+  getDocument,
+} from '../googleDocsApiHelpers.js';
 import type { BatchUpdateMetadata } from '../googleDocsApiHelpers.js';
 
 export { docsJsonToMarkdown } from './docsToMarkdown.js';
@@ -99,7 +103,7 @@ export async function extractMarkdown(
 ): Promise<string> {
   const tabId = options?.tabId;
 
-  const res = await docs.documents.get({
+  const res = await getDocument(docs, {
     documentId,
     includeTabsContent: !!tabId,
     fields: tabId

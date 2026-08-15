@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { getDocsClient } from '../../clients.js';
 import * as GDocsHelpers from '../../googleDocsApiHelpers.js';
 import { DocumentIdParameter } from '../../types.js';
+import { getDefaultWriteMode } from '../../config.js';
 import { getTableById } from './structureHelpers.js';
 import { replaceTableRowData as replaceTableRowDataInternal } from './tableRowDataHelpers.js';
 import { TABLE_CONTENT_INDEXED_BODY_FIELDS, buildDocumentGetFields } from './tabFieldMasks.js';
@@ -29,9 +30,16 @@ export function register(server: FastMCP) {
         .describe(
           'The ID of the specific tab containing the table. If not specified, uses the first tab or legacy document body.'
         ),
+      editMode: z
+        .enum(['direct', 'suggest'])
+        .optional()
+        .describe(
+          "How the change is written: 'direct' commits it immediately; 'suggest' leaves it as a pending suggested edit. Defaults to the GOOGLE_DOCS_WRITE_MODE environment variable, or 'direct' when that is unset. Suggest mode requires the Google Workspace Developer Preview Program."
+        ),
     }),
     execute: async (args, { log }) => {
       const docs = await getDocsClient();
+      const writeMode = args.editMode ?? getDefaultWriteMode();
       log.info(
         `Appending ${args.rows.length} row(s) to ${args.tableId} in doc ${args.documentId}${args.tabId ? ` (tab: ${args.tabId})` : ''}`
       );
@@ -41,7 +49,7 @@ export function register(server: FastMCP) {
           TABLE_CONTENT_INDEXED_BODY_FIELDS,
           args.tabId
         );
-        const res = await docs.documents.get({
+        const res = await GDocsHelpers.getDocument(docs, {
           documentId: args.documentId,
           ...(args.tabId && { includeTabsContent: true }),
           fields: tableRowFieldMask,
@@ -75,10 +83,11 @@ export function register(server: FastMCP) {
           docs,
           args.documentId,
           insertRequests,
-          log
+          log,
+          { writeMode }
         );
 
-        const refreshed = await docs.documents.get({
+        const refreshed = await GDocsHelpers.getDocument(docs, {
           documentId: args.documentId,
           ...(args.tabId && { includeTabsContent: true }),
           fields: tableRowFieldMask,
@@ -96,7 +105,7 @@ export function register(server: FastMCP) {
               ? updatedTable
               : getTableById(
                   (
-                    await docs.documents.get({
+                    await GDocsHelpers.getDocument(docs, {
                       documentId: args.documentId,
                       ...(args.tabId && { includeTabsContent: true }),
                       fields: tableRowFieldMask,
@@ -116,7 +125,8 @@ export function register(server: FastMCP) {
             currentTable,
             firstAppendedRowIndex + offset,
             rowValues,
-            args.tabId
+            args.tabId,
+            { writeMode }
           );
         }
 

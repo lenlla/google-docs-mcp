@@ -7,6 +7,7 @@ import {
   NotImplementedError,
 } from '../../../types.js';
 import * as GDocsHelpers from '../../../googleDocsApiHelpers.js';
+import { getDefaultWriteMode } from '../../../config.js';
 
 export function register(server: FastMCP) {
   server.addTool({
@@ -16,6 +17,7 @@ export function register(server: FastMCP) {
     parameters: ApplyParagraphStyleToolParameters,
     execute: async (args: ApplyParagraphStyleToolArgs, { log }) => {
       const docs = await getDocsClient();
+      const writeMode = args.editMode ?? getDefaultWriteMode();
       let startIndex: number | undefined;
       let endIndex: number | undefined;
 
@@ -120,7 +122,9 @@ export function register(server: FastMCP) {
         }
 
         log.info(`Applying styles: ${requestInfo.fields.join(', ')}`);
-        await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [requestInfo.request]);
+        await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [requestInfo.request], {
+          writeMode,
+        });
 
         return `Successfully applied paragraph styles (${requestInfo.fields.join(', ')}) to the paragraph${args.tabId ? ` in tab ${args.tabId}` : ''}.`;
       } catch (error: any) {

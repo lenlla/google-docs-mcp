@@ -41,10 +41,9 @@ export function register(server: FastMCP) {
 
       try {
         // 1. Get document end index
-        const doc = await docs.documents.get({
+        const doc = await GDocsHelpers.getDocument(docs, {
           documentId: args.documentId,
           includeTabsContent: !!args.tabId,
-          suggestionsViewMode: 'PREVIEW_WITHOUT_SUGGESTIONS',
           fields: args.tabId ? TAB_BODY_END_INDEX_FIELDS : 'body(content(endIndex))',
         });
 
